@@ -1,0 +1,6 @@
+myenv/
+out/
+stash/
+input_images/
+yolo11x.pt
+yolo11x-pose.pt
