@@ -1,6 +1,8 @@
 import cv2
 import os
 import json
+from pathlib import Path
+from typing import Tuple
 from ultralytics import YOLO
 from datetime import datetime
 
@@ -11,32 +13,58 @@ bbox_model = YOLO("yolo11x.pt")
 pose_model = YOLO("yolo11x-pose.pt")
 
 # 入力画像ディレクトリ
-input_folder = 'input_images'
+input_folder = Path('input_images')
 
 # タイムスタンプ付きの出力フォルダを作成
 timestamp = datetime.now().strftime('%y%m%d%H%M%S')
-output_base = os.path.join('out', timestamp)
-image_output_folder = os.path.join(output_base, 'image')
-os.makedirs(image_output_folder, exist_ok=True)
-os.makedirs(output_base, exist_ok=True)
+output_base = Path('out') / timestamp
+image_output_folder = output_base / 'image'
+image_output_folder.mkdir(parents=True, exist_ok=True)
 
 # 全ての結果を格納するリスト
 all_results = []
 record_id = 1
 
-# input_imagesフォルダ内のすべての画像を処理
-for img_file in os.listdir(input_folder):
-    if img_file.endswith(('.jpg', '.jpeg', '.png')):  # 対象の画像ファイルのみ処理
-        img_path = os.path.join(input_folder, img_file)
+def convert_image_path(image_path: Path) -> str:
+    """
+    画像パスを新しいファイル名形式に変換
+    例: 'dir1/dir2/filename.jpg' -> 'dir1_dir2_filename.jpg'
+    """
+    # パスの各部分を取得
+    parts = list(image_path.parts)
+    # 拡張子を除いたファイル名を取得
+    filename = image_path.stem
+    # ディレクトリ名とファイル名を結合（リストとして結合）
+    new_name = "_".join(parts[:-1] + [filename])
+    # 元の拡張子を追加
+    return f"{new_name}{image_path.suffix}"
 
+def get_scaled_size(img_width: int, base_width: int = 1920) -> Tuple[float, float]:
+    """
+    画像の幅に基づいて、マーカーやテキストのサイズを計算
+    base_width: 基準となる画像幅（1920px）
+    戻り値: (マーカーサイズ, テキストサイズ)
+    """
+    scale = img_width / base_width
+    marker_size = max(3, int(5 * scale))  # 最小3px
+    text_size = max(0.5, 0.9 * scale)     # 最小0.5
+    return marker_size, text_size
+
+# input_imagesフォルダ内のすべての画像を再帰的に処理
+for img_path in input_folder.rglob("*"):
+    if img_path.is_file() and img_path.suffix.lower() in {'.jpg', '.jpeg', '.png'}:
         # 画像を読み込む
-        img = cv2.imread(img_path)
+        img = cv2.imread(str(img_path))
         if img is None:
-            print(f"{img_file} は読み込めませんでした。スキップします。")
+            print(f"{img_path} は読み込めませんでした。スキップします。")
             continue
 
-        # ファイル名を取得し、拡張子を除外
-        image_filename = os.path.splitext(img_file)[0]
+        # 画像の解像度を取得
+        img_height, img_width = img.shape[:2]
+        marker_size, text_size = get_scaled_size(img_width)
+
+        # 新しいファイル名形式に変換
+        new_image_name = convert_image_path(img_path.relative_to(input_folder))
 
         # 1. バウンディングボックスの推論を実行
         bbox_results = bbox_model(img)
@@ -100,19 +128,23 @@ for img_file in os.listdir(input_folder):
                             x, y = int(kpt[0]), int(kpt[1])
                             keypoints.append([x, y])
                             if x > 0 and y > 0:
-                                cv2.circle(img_draw, (x, y), 5, (0, 0, 255), -1)
+                                cv2.circle(img_draw, (x, y), marker_size, (0, 0, 255), -1)
                                 has_valid_pose = True
 
                         if has_valid_pose:
                             # バウンディングボックスを画像に描画
-                            cv2.rectangle(img_draw, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            line_thickness = max(2, int(2 * img_width / 1920))  # 線の太さも調整
+                            cv2.rectangle(img_draw, (x1, y1), (x2, y2), (0, 255, 0), line_thickness)
                             label = f'ID:{record_id} Person {confidence:.2f}'
-                            cv2.putText(img_draw, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                            # テキストの位置も調整
+                            text_y = y1 - int(10 * img_width / 1920)
+                            cv2.putText(img_draw, label, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                                      text_size, (0, 255, 0), line_thickness)
 
                             # 結果をリストに追加
                             result_data = {
                                 "id": record_id,
-                                "image_name": img_file,
+                                "image_name": new_image_name,
                                 "bbox": [x1, y1, x2, y2],
                                 "keypoints": keypoints
                             }
@@ -120,12 +152,12 @@ for img_file in os.listdir(input_folder):
                             record_id += 1
 
         # 描画した画像を保存
-        image_output_path = os.path.join(image_output_folder, f"{image_filename}.jpg")
-        cv2.imwrite(image_output_path, img_draw)
-        print(f"{img_file} の処理が完了しました。")
+        image_output_path = image_output_folder / f"{Path(new_image_name).stem}.jpg"
+        cv2.imwrite(str(image_output_path), img_draw)
+        print(f"{img_path} の処理が完了しました。")
 
 # 全ての結果を1つのJSONファイルに保存
-json_output_path = os.path.join(output_base, f"{timestamp}.json")
+json_output_path = output_base / f"{timestamp}.json"
 with open(json_output_path, 'w') as json_file:
     json.dump(all_results, json_file, indent=2)
 

@@ -4,15 +4,16 @@ from .loader import load
 from .finder import find_top_n_similar
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="python -m pose_similarity",
-        description="指定 id の姿勢に最も類似するレコードを検索します。",
-    )
-    parser.add_argument("json_path", type=Path, help="対象 JSON ファイルへの相対/絶対パス")
-    parser.add_argument("--id", type=int, required=True, help="検索対象の id")
-    parser.add_argument("--top", type=int, default=5, help="表示する上位件数 (デフォルト: 5)")
-    args = parser.parse_args()
+def main(args=None):
+    if args is None:
+        parser = argparse.ArgumentParser(
+            prog="python -m pose_similarity",
+            description="指定 id の姿勢に最も類似するレコードを検索します。",
+        )
+        parser.add_argument("json_path", type=Path, help="対象 JSON ファイルへの相対/絶対パス")
+        parser.add_argument("--id", type=int, required=True, help="検索対象の id")
+        parser.add_argument("--top", type=int, default=5, help="表示する上位件数 (デフォルト: 5)")
+        args = parser.parse_args()
 
     data = load(args.json_path)
     results = find_top_n_similar(args.id, data, n=args.top)
