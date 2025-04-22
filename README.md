@@ -1,0 +1,92 @@
+# Pose Similarity Tool
+
+姿勢の類似度を計算し、類似ポーズの検索や可視化を行うツールです。
+
+## インストール方法
+
+1. 必要なパッケージのインストール:
+
+```bash
+pip install -r requirements.txt
+```
+
+## 主な機能
+
+### 1. 類似ポーズの検索
+
+指定した ID の姿勢に類似する姿勢を検索します。
+
+```bash
+python -m pose_similarity search <json_path> --id <検索対象ID> [--top <表示件数>]
+
+# 例：ID 10 の姿勢に類似する上位5件を表示
+python -m pose_similarity search out/250417235650/250417235650.json --id 10 --top 5
+```
+
+### 2. 姿勢の比較画像生成
+
+指定した ID の姿勢と類似する姿勢を並べて表示する画像を生成します。
+
+```bash
+python -m pose_similarity compare <json_path> --id <検索対象ID> [--output <出力ファイル>]
+
+# 例：ID 10 の姿勢との比較画像を生成
+python -m pose_similarity compare out/250417235650/250417235650.json --id 10 --output comparison.jpg
+
+# ランダムに選択した姿勢の比較
+python -m pose_similarity compare out/250417235650/250417235650.json --random --count 10
+```
+
+### 3. 連鎖的な類似画像生成
+
+指定した ID から始めて、連鎖的に類似する姿勢を選択して画像を生成します。
+
+```bash
+python -m pose_similarity chain <json_path> --id <開始ID> --count <生成枚数> [--output <出力ディレクトリ>]
+
+# 例：ID 10 から始めて12枚の連鎖画像を生成
+python -m pose_similarity chain out/250417235650/250417235650.json --id 10 --count 12
+```
+
+### 4. ネットワーク可視化
+
+姿勢の類似関係をネットワークとして可視化します。
+
+```bash
+python -m pose_similarity network <json_path> [オプション]
+
+# 基本的な使用例
+python -m pose_similarity network out/250417235650/250417235650.json
+
+# UMAPを使用した可視化
+python -m pose_similarity network out/250417235650/250417235650.json --embed umap
+
+# 詳細なパラメータ設定
+python -m pose_similarity network out/250417235650/250417235650.json \
+    --embed umap \
+    --n-neighbors 15 \
+    --min-dist 0.1 \
+    --min-cluster-size 5 \
+    --min-samples 3 \
+    --threshold 50.0
+```
+
+#### ネットワーク可視化のオプション
+
+- `--embed`: 次元削減手法の選択（"mds" または "umap"）
+- `--n-neighbors`: UMAP の近傍点数（デフォルト: 15）
+- `--min-dist`: UMAP の最小距離（デフォルト: 0.1）
+- `--min-cluster-size`: クラスターの最小サイズ（デフォルト: 5）
+- `--min-samples`: HDBSCAN のコアポイント定義用の最小サンプル数（デフォルト: 3）
+- `--threshold`: エッジを描画する距離の閾値（デフォルト: 50.0）
+- `--output`: 出力ファイル名（デフォルト: network.html）
+
+## 注意事項
+
+- 姿勢データは正規化されて処理されます（1000×1000 スケール）
+- 類似度の計算には、有効なキーポイントのみを使用します
+- ネットワーク可視化はインタラクティブな HTML 形式で出力され、ブラウザで操作可能です
+  - ズームイン/アウト
+  - ドラッグによる移動
+  - ノードへのホバーで ID 表示
+  - クラスター別の色分け表示

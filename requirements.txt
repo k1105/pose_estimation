@@ -1,2 +1,9 @@
-opencv-python>=4.8.0
-ultralytics>=8.0.0 
+opencv-python==4.8.0.76
+ultralytics>=8.0.0
+scikit-learn>=1.0.0
+networkx>=2.6.0
+matplotlib>=3.5.0
+tqdm>=4.65.0
+plotly>=5.18.0
+hdbscan>=0.8.33
+umap-learn>=0.5.3 

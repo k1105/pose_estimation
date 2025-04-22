@@ -28,8 +28,8 @@ def find_top_n_similar(target_id: int, data: Dataset, n: int = 5) -> List[Tuple[
     for pid, vec in emb.items():
         if pid == target_id:
             continue
-        # d = pose_distance(tgt, vec)
-        d = procrustes_distance(tgt, vec)
+        d = pose_distance(tgt, vec)
+        # d = procrustes_distance(tgt, vec)
         distances.append((pid, d))
     
     # 距離でソートして上位n件を返す
