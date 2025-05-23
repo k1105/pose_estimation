@@ -28,14 +28,14 @@ record_id = 1
 def convert_image_path(image_path: Path) -> str:
     """
     画像パスを新しいファイル名形式に変換
-    例: 'dir1/dir2/filename.jpg' -> 'dir1_dir2_filename.jpg'
+    例: 'dir1/dir2/filename.jpg' -> 'dir1-dir2-filename.jpg'
     """
     # パスの各部分を取得
     parts = list(image_path.parts)
     # 拡張子を除いたファイル名を取得
     filename = image_path.stem
     # ディレクトリ名とファイル名を結合（リストとして結合）
-    new_name = "_".join(parts[:-1] + [filename])
+    new_name = "-".join(parts[:-1] + [filename])
     # 元の拡張子を追加
     return f"{new_name}{image_path.suffix}"
 

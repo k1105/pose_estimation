@@ -121,6 +121,66 @@ python -m pose_similarity network out/250417235650/250417235650.json \
 - `--threshold`: エッジを描画する距離の閾値（デフォルト: 50.0）
 - `--output`: 出力ファイル名（デフォルト: network.html）
 
+#### クラスタリング手法の選択
+
+2 つのクラスタリング手法が利用可能です：
+
+1. HDBSCAN（デフォルト）: 密度ベースのクラスタリング
+
+   ```bash
+   python -m pose_similarity network out/250417235650/250417235650.json \
+       --cluster-method hdbscan \
+       --min-cluster-size 5 \
+       --min-samples 3 \
+       --threshold 50.0
+   ```
+
+2. Agglomerative: クラスター数を指定可能な階層的クラスタリング
+   ```bash
+   python -m pose_similarity network out/250417235650/250417235650.json \
+       --cluster-method agglomerative \
+       --n-clusters 10
+   ```
+
+クラスター数を直接制御したい場合は、Agglomerative クラスタリングを使用してください。
+クラスター数を指定しない場合は、データ数の平方根が使用されます。
+
+#### クラスタリングパラメータの調整
+
+HDBSCAN のパラメータは以下のように動作します：
+
+- `--min-cluster-size`: 各クラスターに必要な最小ポイント数
+
+  - 大きくすると：小さなクラスターが除外される
+  - 小さくすると：小さなクラスターも認識される
+
+- `--min-samples`: コアポイントを定義するための最小近傍点数
+
+  - 大きくすると：密度の高い領域のみがクラスターとして認識される
+  - 小さくすると：疎な領域もクラスターとして認識される
+
+- `--threshold`: エッジを描画する距離の閾値
+  - 大きくすると：より遠いポイント間も接続され、クラスターが統合されやすい
+  - 小さくすると：近いポイント間のみが接続され、クラスターが分割されやすい
+
+クラスター数を調整するための設定例：
+
+```bash
+# より多くのクラスターを得る場合
+python -m pose_similarity network out/250417235650/250417235650.json \
+    --threshold 30.0 \
+    --min-cluster-size 5 \
+    --min-samples 2
+
+# より少ないクラスターを得る場合
+python -m pose_similarity network out/250417235650/250417235650.json \
+    --threshold 70.0 \
+    --min-cluster-size 10 \
+    --min-samples 5
+```
+
+注意：これらのパラメータは相互に影響し合うため、データセットに応じて適切な値を探す必要があります。
+
 ## 注意事項
 
 - 姿勢データは正規化されて処理されます（1000×1000 スケール）

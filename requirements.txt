@@ -6,4 +6,5 @@ matplotlib>=3.5.0
 tqdm>=4.65.0
 plotly>=5.18.0
 hdbscan>=0.8.33
-umap-learn>=0.5.3 
+umap-learn>=0.5.3
+py-feat>=0.5.0 

@@ -6,321 +6,202 @@ import numpy as np
 from sklearn.manifold import MDS
 import umap
 import hdbscan
+from sklearn.cluster import AgglomerativeClustering
 import networkx as nx
 import plotly.graph_objects as go
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
 from tqdm import tqdm
 from .preprocess import normalize_pose
-from .metrics import pose_distance, procrustes_distance
+from .metrics import procrustes_distance
 
 
 def load_json(json_path: Path) -> List[dict]:
-    """JSONファイルを読み込む"""
-    print(f"Loading JSON file: {json_path}")
     with open(json_path, 'r') as f:
-        data = json.load(f)
-    print(f"Loaded {len(data)} records")
-    return data
+        return json.load(f)
 
 
-def calculate_distances_for_record(
-    target_id: int,
-    target_idx: int,
-    data: List[dict],
-    id_to_idx: Dict[int, int]
-) -> Tuple[int, Dict[int, float]]:
-    """
-    1つのレコードに対する距離を計算
-    """
-    distances = {}
-    # ターゲットの姿勢を正規化
-    target_pose = next(r for r in data if r["id"] == target_id)
-    try:
-        target_flat, _ = normalize_pose(target_pose)
-    except ValueError as e:
-        print(f"Warning: Failed to normalize pose for ID {target_id}: {e}")
-        return target_idx, distances
-    
-    for other_record in data:
-        other_id = other_record["id"]
-        if other_id == target_id:
-            continue
-            
+def compute_embeddings(data: List[dict]) -> Tuple[np.ndarray, List[int]]:
+    embeddings = []
+    ids = []
+    for item in data:
         try:
-            # 比較対象の姿勢を正規化
-            other_flat, _ = normalize_pose(other_record)
-            
-            # 距離を計算
-            # distance = pose_distance(target_flat, other_flat)
-            distance =  procrustes_distance(target_flat, other_flat)
-            if not np.isinf(distance):
-                distances[other_id] = distance
-            
-        except ValueError as e:
-            print(f"Warning: Failed to normalize pose for ID {other_id}: {e}")
+            vec, _ = normalize_pose(item)
+            embeddings.append(vec)
+            ids.append(item["id"])
+        except ValueError:
             continue
-    
-    return target_idx, distances
+    return np.array(embeddings), ids
 
 
-def normalize_distance_matrix(distance_matrix: np.ndarray) -> np.ndarray:
-    """
-    距離行列を正規化
-    """
-    # 無限大とNaNを大きな値に置き換え
-    distance_matrix = np.nan_to_num(distance_matrix, nan=1000.0, posinf=1000.0, neginf=1000.0)
-    
-    # 最大値を100に正規化
-    max_distance = np.max(distance_matrix)
-    if max_distance > 0:
-        distance_matrix = distance_matrix / max_distance * 100
-    
-    return distance_matrix
+def compute_distance_matrix(embeddings: np.ndarray) -> np.ndarray:
+    n = embeddings.shape[0]
+    D = np.zeros((n, n), dtype=np.float64)
+    for i in tqdm(range(n), desc="Distance matrix"):
+        for j in range(i + 1, n):
+            d = procrustes_distance(embeddings[i], embeddings[j])
+            D[i, j] = D[j, i] = d
+    return np.nan_to_num(D, nan=1000.0, posinf=1000.0, neginf=1000.0)
 
 
-def create_distance_matrix(data: List[dict]) -> np.ndarray:
-    """
-    距離行列を作成（並列処理版）
-    data: JSONデータ
-    """
-    print("Creating distance matrix...")
-    n = len(data)
-    distance_matrix = np.zeros((n, n))
-    
-    # 各IDのインデックスを取得
-    id_to_idx = {record["id"]: idx for idx, record in enumerate(data)}
-    
-    # 並列処理で距離を計算
-    with ProcessPoolExecutor() as executor:
-        # 部分関数を作成
-        calc_func = partial(
-            calculate_distances_for_record,
-            data=data,
-            id_to_idx=id_to_idx
-        )
-        
-        # 進捗バーを表示しながら並列処理
-        futures = []
-        for i, record in enumerate(data):
-            futures.append(executor.submit(calc_func, record["id"], i))
-        
-        # 結果を収集
-        for future in tqdm(futures, total=n, desc="Calculating distances"):
-            target_idx, distances = future.result()
-            for other_id, distance in distances.items():
-                other_idx = id_to_idx[other_id]
-                distance_matrix[target_idx, other_idx] = distance
-                distance_matrix[other_idx, target_idx] = distance  # 対称行列
-    
-    # 距離行列を正規化
-    distance_matrix = normalize_distance_matrix(distance_matrix)
-    
-    print("Distance matrix creation completed")
-    return distance_matrix
-
-
-def create_network_visualization(
-    json_path: Path,
-    output_path: Path,
-    distance_threshold: float = 50.0,
-    min_cluster_size: int = 5,
-    min_samples: int = 3,
-    embed_method: str = "mds",
-    n_neighbors: int = 15,
-    min_dist: float = 0.1
-) -> None:
-    """
-    ネットワーク可視化を作成（インタラクティブ版）
-    json_path: JSONファイルのパス
-    output_path: 出力HTMLファイルのパス
-    distance_threshold: エッジを描画する距離の閾値
-    min_cluster_size: クラスターの最小サイズ
-    min_samples: コアポイントを定義するのに必要な最小近傍点数
-    embed_method: 埋め込み手法 ("mds" or "umap")
-    n_neighbors: UMAPのneighbors数
-    min_dist: UMAPの最小距離
-    """
-    # JSONファイルを読み込む
-    data = load_json(json_path)
-    
-    # 距離行列を作成
-    distance_matrix = create_distance_matrix(data)
-    
-    print(f"Calculating 2D coordinates using {embed_method.upper()}...")
-    # 2次元座標を計算
-    if embed_method.lower() == "mds":
-        embedder = MDS(
-            n_components=2,
-            dissimilarity='precomputed',
-            random_state=42,
-            max_iter=300,
-            eps=1e-6,
-            n_init=4
-        )
-        positions = embedder.fit_transform(distance_matrix)
-    else:  # umap
-        embedder = umap.UMAP(
-            n_components=2,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric='precomputed',
-            random_state=42
-        )
-        positions = embedder.fit_transform(distance_matrix)
-    
-    print(f"{embed_method.upper()} calculation completed")
-    
-    print("Performing clustering...")
-    # HDBSCANでクラスタリング
-    clusterer = hdbscan.HDBSCAN(
+def cluster_hdbscan(D: np.ndarray, min_cluster_size=5, min_samples=3) -> np.ndarray:
+    model = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,
-        metric='precomputed',
-        cluster_selection_epsilon=distance_threshold
+        metric='precomputed'
     )
-    cluster_labels = clusterer.fit_predict(distance_matrix)
-    unique_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)  # ノイズを除外
-    noise_points = np.sum(cluster_labels == -1)
-    print(f"Clustering completed: {unique_clusters} clusters found, {noise_points} noise points")
-    
-    print("Creating network graph...")
-    # ネットワークグラフを作成
-    G = nx.Graph()
-    
-    # ノードを追加
-    for i, record in enumerate(data):
-        G.add_node(
-            record["id"],
-            pos=positions[i],
-            cluster=cluster_labels[i]
+    return model.fit_predict(D)
+
+
+def cluster_agglomerative(D: np.ndarray, n_clusters: int) -> np.ndarray:
+    model = AgglomerativeClustering(
+        n_clusters=n_clusters,
+        affinity='precomputed',
+        linkage='average'
+    )
+    return model.fit_predict(D)
+
+
+def cluster_data(D: np.ndarray, method: str, min_cluster_size: int = 5, min_samples: int = 3, n_clusters: int = None) -> np.ndarray:
+    if method == "hdbscan":
+        return cluster_hdbscan(D, min_cluster_size, min_samples)
+    elif method == "agglomerative":
+        if n_clusters is None:
+            n_clusters = int(np.sqrt(D.shape[0]))
+        return cluster_agglomerative(D, n_clusters)
+    else:
+        raise ValueError(f"Unknown clustering method: {method}")
+
+
+def embed_positions(D: np.ndarray, method: str, n_neighbors: int, min_dist: float) -> np.ndarray:
+    if method == "umap":
+        reducer = umap.UMAP(
+            metric='precomputed',
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            n_components=2,
+            random_state=42
         )
-    
-    # エッジを追加（距離が閾値未満のペアのみ）
-    edge_distances = []
-    edge_pairs = []
-    for i in tqdm(range(len(data)), desc="Adding edges"):
-        for j in range(i + 1, len(data)):
-            if distance_matrix[i, j] < distance_threshold:
-                G.add_edge(
-                    data[i]["id"],
-                    data[j]["id"],
-                    weight=distance_matrix[i, j]
-                )
-                edge_distances.append(distance_matrix[i, j])
-                edge_pairs.append((data[i]["id"], data[j]["id"]))
-    
-    print(f"Graph created: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-    
-    # Plotlyでの可視化用のデータを準備
-    edge_x = []
-    edge_y = []
-    for edge in edge_pairs:
-        x0, y0 = G.nodes[edge[0]]['pos']
-        x1, y1 = G.nodes[edge[1]]['pos']
+        return reducer.fit_transform(D)
+    else:
+        model = MDS(
+            n_components=2,
+            dissimilarity='precomputed',
+            random_state=42
+        )
+        return model.fit_transform(D)
+
+
+def build_graph(ids: List[int], D: np.ndarray, positions: np.ndarray,
+                labels: np.ndarray, edge_mode: str, threshold: float, k: int) -> nx.Graph:
+    G = nx.Graph()
+    for i, id_ in enumerate(ids):
+        G.add_node(id_, pos=positions[i], cluster=int(labels[i]))
+
+    n = len(ids)
+    if edge_mode == "knn":
+        for i in range(n):
+            neighbors = np.argsort(D[i])[1:k+1]
+            for j in neighbors:
+                w = 1.0 / (D[i, j] + 1e-3)
+                G.add_edge(ids[i], ids[j], weight=w)
+    else:
+        for i in range(n):
+            for j in range(i + 1, n):
+                if D[i, j] < threshold:
+                    w = 1.0 / (D[i, j] + 1e-3)
+                    G.add_edge(ids[i], ids[j], weight=w)
+    return G
+
+
+def create_network_visualization(G: nx.Graph, output_path: Path) -> None:
+    pos = nx.spring_layout(G, weight='weight', seed=42, iterations=500)
+    for node in G.nodes:
+        G.nodes[node]['pos'] = pos[node]
+
+    node_x, node_y, node_color, node_id, node_size, node_symbol = [], [], [], [], [], []
+    for node, data in G.nodes(data=True):
+        x, y = data['pos']
+        cluster = data['cluster']
+        node_x.append(x)
+        node_y.append(y)
+        node_color.append(cluster)
+        node_id.append(node)
+        node_size.append(15 if cluster != -1 else 8)
+        node_symbol.append("circle" if cluster != -1 else "x")
+
+    edge_x, edge_y = [], []
+    for u, v in G.edges():
+        x0, y0 = G.nodes[u]['pos']
+        x1, y1 = G.nodes[v]['pos']
         edge_x.extend([x0, x1, None])
         edge_y.extend([y0, y1, None])
-    
-    # エッジのトレースを作成
+
     edge_trace = go.Scatter(
         x=edge_x, y=edge_y,
         line=dict(width=0.5, color='#888'),
         hoverinfo='none',
         mode='lines',
-        opacity=0.2
+        opacity=0.15
     )
-    
-    # ノードの位置を取得
-    node_x = []
-    node_y = []
-    node_ids = []
-    node_clusters = []
-    for node in G.nodes():
-        x, y = G.nodes[node]['pos']
-        node_x.append(x)
-        node_y.append(y)
-        node_ids.append(node)
-        node_clusters.append(G.nodes[node]['cluster'])
-    
-    # ノードのトレースを作成（ノイズポイントは別のマーカーで表示）
+
     node_trace = go.Scatter(
         x=node_x, y=node_y,
         mode='markers+text',
+        text=node_id,
         hoverinfo='text',
-        text=node_ids,
         textposition="top center",
         textfont=dict(size=8),
         marker=dict(
             showscale=True,
             colorscale='Viridis',
-            color=node_clusters,
-            size=[15 if c != -1 else 10 for c in node_clusters],  # ノイズポイントは小さく
-            symbol=[0 if c != -1 else 4 for c in node_clusters],  # ノイズポイントは異なる形状
+            color=node_color,
+            size=node_size,
+            symbol=node_symbol,
             colorbar=dict(
                 thickness=15,
-                title=dict(
-                    text='Cluster',
-                    side='right'
-                ),
+                title="Cluster",
                 xanchor='left'
             )
         )
     )
-    
-    # レイアウトを作成
-    layout = go.Layout(
-        title=f'Pose Network Visualization<br>{unique_clusters} clusters, {noise_points} noise points, {G.number_of_nodes()} nodes, {G.number_of_edges()} edges',
-        showlegend=False,
-        hovermode='closest',
-        margin=dict(b=20,l=5,r=5,t=40),
-        plot_bgcolor='white',
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
-    )
-    
-    # 図を作成
-    fig = go.Figure(data=[edge_trace, node_trace], layout=layout)
-    
-    # HTMLファイルとして保存
-    output_path = output_path.with_suffix('.html')
-    print(f"Saving visualization to {output_path}...")
-    fig.write_html(str(output_path))
-    print(f"Interactive visualization saved to: {output_path}")
+
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title=f'Pose Similarity Network ({G.number_of_nodes()} nodes, {G.number_of_edges()} edges)',
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=40, l=40, r=40, t=40),
+                        plot_bgcolor='white',
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+                    ))
+    fig.write_html(str(output_path.with_suffix(".html")))
+    print(f"Saved: {output_path.with_suffix('.html')}")
 
 
-def main(args=None):
-    if args is None:
-        parser = argparse.ArgumentParser(
-            description="Create an interactive network visualization of pose similarities"
-        )
-        parser.add_argument("json_path", type=Path, help="Path to the JSON file")
-        parser.add_argument("--output", type=Path, default=Path("network.html"),
-                          help="Output HTML file path (default: network.html)")
-        parser.add_argument("--threshold", type=float, default=50.0,
-                          help="Distance threshold for edges (default: 50.0)")
-        parser.add_argument("--min-cluster-size", type=int, default=5,
-                          help="Minimum cluster size for HDBSCAN (default: 5)")
-        parser.add_argument("--min-samples", type=int, default=3,
-                          help="Minimum samples for HDBSCAN core points (default: 3)")
-        parser.add_argument("--embed", type=str, default="mds",
-                          help="Embedding method (default: mds)")
-        parser.add_argument("--n-neighbors", type=int, default=15,
-                          help="Number of neighbors for UMAP (default: 15)")
-        parser.add_argument("--min-dist", type=float, default=0.1,
-                          help="Minimum distance for UMAP (default: 0.1)")
-        args = parser.parse_args()
-    
-    create_network_visualization(
-        args.json_path,
-        args.output,
-        args.threshold,
-        args.min_cluster_size,
-        args.min_samples,
-        args.embed,
-        args.n_neighbors,
-        args.min_dist
-    )
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("json_path", type=Path)
+    parser.add_argument("--output", type=Path, default=Path("network.html"))
+    parser.add_argument("--embed", choices=["umap", "mds"], default="umap")
+    parser.add_argument("--edge-mode", choices=["knn", "threshold"], default="knn")
+    parser.add_argument("--threshold", type=float, default=25.0)
+    parser.add_argument("-k", type=int, default=6)
+    parser.add_argument("--min-cluster-size", type=int, default=5)
+    parser.add_argument("--min-samples", type=int, default=3)
+    parser.add_argument("--n-neighbors", type=int, default=15)
+    parser.add_argument("--min-dist", type=float, default=0.1)
+    parser.add_argument("--cluster-method", choices=["hdbscan", "agglomerative"], default="hdbscan")
+    parser.add_argument("--n-clusters", type=int)
+    args = parser.parse_args()
+
+    data = load_json(args.json_path)
+    embeddings, ids = compute_embeddings(data)
+    D = compute_distance_matrix(embeddings)
+    labels = cluster_data(D, args.cluster_method, args.min_cluster_size, args.min_samples, args.n_clusters)
+    positions = embed_positions(D, args.embed, args.n_neighbors, args.min_dist)
+    G = build_graph(ids, D, positions, labels, args.edge_mode, args.threshold, args.k)
+    create_network_visualization(G, args.output)
 
 
 if __name__ == "__main__":
-    main() 
+    main()

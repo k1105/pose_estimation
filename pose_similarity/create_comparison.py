@@ -1,6 +1,7 @@
 import cv2
 import json
 import argparse
+import shutil
 from pathlib import Path
 from typing import List, Tuple
 import numpy as np
@@ -17,10 +18,24 @@ def find_image_path(base_dir: Path, image_name: str) -> Path:
     """画像ファイルのパスを探す"""
     # 拡張子を除いたファイル名を取得
     stem = Path(image_name).stem
+    # ハイフンで区切られた部分をディレクトリパスとして扱う
+    parts = stem.split('-')
+    if len(parts) > 1:
+        # 最後の部分をファイル名として、それ以外をディレクトリパスとして扱う
+        dir_path = Path('/'.join(parts[:-1]))
+        file_name = parts[-1]
+    else:
+        # ハイフンがない場合は通常のファイル名として扱う
+        dir_path = Path("")
+        file_name = stem
+
     # 画像ファイルを探す
-    for img_path in base_dir.rglob(f"{stem}.jpg"):
-        return img_path
-    raise FileNotFoundError(f"Image not found: {image_name}")
+    input_dir = base_dir.parent.parent / "input_images"  # out ディレクトリと同じ階層の input_images を参照
+    target_path = input_dir / dir_path / f"{file_name}.jpg"
+    
+    if target_path.exists():
+        return target_path
+    raise FileNotFoundError(f"Image not found: {image_name} (searched at {target_path})")
 
 
 def create_comparison_image(json_path: Path, target_id: int, output_path: Path) -> None:
@@ -39,8 +54,15 @@ def create_comparison_image(json_path: Path, target_id: int, output_path: Path) 
         raise ValueError(f"ID {target_id} not found in JSON")
     
     # 画像ファイルのパスを探す
-    base_dir = json_path.parent / "image"
+    base_dir = json_path.parent
     target_image_path = find_image_path(base_dir, target_record["image_name"])
+    
+    # 出力ディレクトリを作成
+    output_dir = output_path.parent / f"compare_{target_id}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 元画像をコピー
+    shutil.copy2(target_image_path, output_dir / f"original_{target_id}.jpg")
     
     # 画像を読み込む
     target_image = cv2.imread(str(target_image_path))
@@ -56,6 +78,9 @@ def create_comparison_image(json_path: Path, target_id: int, output_path: Path) 
         record = next((r for r in data if r["id"] == best_id), None)
         if record:
             print(f"{rank}位: id={best_id:02d} 画像={record['image_name']} 距離={dist:.2f}")
+            # 類似画像をコピー
+            similar_image_path = find_image_path(base_dir, record["image_name"])
+            shutil.copy2(similar_image_path, output_dir / f"similar_{rank}_{best_id}.jpg")
     
     # バウンディングボックスから人物を切り出し
     def crop_person(image, bbox):
@@ -172,8 +197,10 @@ def create_comparison_image(json_path: Path, target_id: int, output_path: Path) 
     result_image = cv2.resize(result_image, (new_w, new_h))
     
     # 画像を保存
+    output_path = output_dir / "comparison.jpg"
     cv2.imwrite(str(output_path), result_image)
     print(f"Comparison image saved to: {output_path}")
+    print(f"All images are saved in: {output_dir}")
 
 
 def get_random_ids(data: List[dict], count: int = 10) -> List[int]:

@@ -3,7 +3,16 @@ from pathlib import Path
 from .cli import main as search_main
 from .create_comparison import main as comparison_main
 from .chain_comparison import main as chain_main
-from .visualize_network import main as network_main
+from .visualize_network import (
+    main as network_main,
+    create_network_visualization,
+    load_json,
+    compute_embeddings,
+    compute_distance_matrix,
+    cluster_data,
+    embed_positions,
+    build_graph
+)
 
 
 def main():
@@ -36,70 +45,31 @@ def main():
     chain_parser.add_argument("--output", type=Path, help="出力ディレクトリのパス (デフォルト: chain_images_id{id})")
 
     # ネットワーク可視化用のサブコマンド
-    network_parser = subparsers.add_parser(
-        "network",
-        help="Create network visualization of pose similarities"
-    )
-    network_parser.add_argument(
-        "json_path",
-        type=Path,
-        help="Path to the JSON file"
-    )
-    network_parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("network.html"),
-        help="Output HTML file path (default: network.html)"
-    )
-    network_parser.add_argument(
-        "--threshold",
-        type=float,
-        default=50.0,
-        help="Distance threshold for edges (default: 50.0)"
-    )
-    network_parser.add_argument(
-        "--min-cluster-size",
-        type=int,
-        default=5,
-        help="Minimum cluster size for HDBSCAN (default: 5)"
-    )
-    network_parser.add_argument(
-        "--min-samples",
-        type=int,
-        default=3,
-        help="Minimum samples for HDBSCAN core points (default: 3)"
-    )
-    network_parser.add_argument(
-        "--embed",
-        type=str,
-        choices=["mds", "umap"],
-        default="mds",
-        help="Embedding method to use (default: mds)"
-    )
-    network_parser.add_argument(
-        "--n-neighbors",
-        type=int,
-        default=15,
-        help="Number of neighbors for UMAP (default: 15)"
-    )
-    network_parser.add_argument(
-        "--min-dist",
-        type=float,
-        default=0.1,
-        help="Minimum distance for UMAP (default: 0.1)"
-    )
-    network_parser.set_defaults(
-        handler=lambda args: create_network_visualization(
-            args.json_path,
-            args.output,
-            args.threshold,
-            args.min_cluster_size,
-            args.min_samples,
-            args.embed,
-            args.n_neighbors,
-            args.min_dist
-        )
-    )
+    network_parser = subparsers.add_parser("network", help="Create network visualization")
+    network_parser.add_argument("json_path", type=Path, help="Path to the JSON file")
+    network_parser.add_argument("--output", type=Path, default=Path("network.html"),
+                              help="Output HTML file path (default: network.html)")
+    network_parser.add_argument("--threshold", type=float, default=50.0,
+                              help="Distance threshold for edges (default: 50.0)")
+    network_parser.add_argument("--cluster-method", type=str, choices=["hdbscan", "agglomerative"],
+                              default="hdbscan", help="Clustering method (default: hdbscan)")
+    network_parser.add_argument("--n-clusters", type=int,
+                              help="Number of clusters for agglomerative clustering (default: sqrt(n))")
+    network_parser.add_argument("--min-cluster-size", type=int, default=5,
+                              help="Minimum cluster size for HDBSCAN (default: 5)")
+    network_parser.add_argument("--min-samples", type=int, default=3,
+                              help="Minimum samples for HDBSCAN core points (default: 3)")
+    network_parser.add_argument("--embed", type=str, default="mds",
+                              help="Embedding method (default: mds)")
+    network_parser.add_argument("--n-neighbors", type=int, default=15,
+                              help="Number of neighbors for UMAP (default: 15)")
+    network_parser.add_argument("--min-dist", type=float, default=0.1,
+                              help="Minimum distance for UMAP (default: 0.1)")
+    network_parser.add_argument("--edge-mode", type=str, choices=["knn", "threshold"], default="knn",
+                              help="Edge creation mode (default: knn)")
+    network_parser.add_argument("-k", type=int, default=6,
+                              help="Number of nearest neighbors for KNN mode (default: 6)")
+    network_parser.set_defaults(func=network_main)
 
     args = parser.parse_args()
 
@@ -117,6 +87,16 @@ def main():
         network_main(args)
     else:
         parser.print_help()
+
+
+def network_main(args):
+    data = load_json(args.json_path)
+    embeddings, ids = compute_embeddings(data)
+    D = compute_distance_matrix(embeddings)
+    labels = cluster_data(D, args.cluster_method, args.min_cluster_size, args.min_samples, args.n_clusters)
+    positions = embed_positions(D, args.embed, args.n_neighbors, args.min_dist)
+    G = build_graph(ids, D, positions, labels, args.edge_mode, args.threshold, args.k)
+    create_network_visualization(G, args.output)
 
 
 if __name__ == "__main__":
