@@ -147,6 +147,84 @@ def process_detections(json_file, input_dir, output_dir, target_face_size=300, m
         # 画像を配置
         arrange_image(image_path, face_info['bbox'], output_path, target_face_size)
 
+def visualize_bbox(image_path, bbox, output_path=None):
+    """
+    画像にバウンディングボックスを重畳して表示・保存する
+    
+    Args:
+        image_path (Path): 入力画像のパス
+        bbox (dict): バウンディングボックスの情報
+        output_path (Path, optional): 出力画像のパス。Noneの場合は表示のみ
+    """
+    try:
+        # 画像を読み込む
+        image = cv2.imread(str(image_path))
+        if image is None:
+            print(f"Error: Could not load image: {image_path}")
+            return
+        
+        # バウンディングボックスを描画
+        x, y, w, h = bbox['x'], bbox['y'], bbox['width'], bbox['height']
+        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        
+        # 出力パスが指定されている場合は保存
+        if output_path:
+            cv2.imwrite(str(output_path), image)
+        else:
+            # 画像を表示
+            cv2.imshow('Image with Bounding Box', image)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
+    except Exception as e:
+        print(f"Error processing {image_path}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+def visualize_by_id(json_file, input_dir, target_id, output_dir=None):
+    """
+    指定したIDの画像にバウンディングボックスを重畳して表示・保存する
+    
+    Args:
+        json_file (str): 検出結果のJSONファイルのパス
+        input_dir (str): 入力ディレクトリのパス
+        target_id (int): 対象のID
+        output_dir (str, optional): 出力ディレクトリのパス。Noneの場合は表示のみ
+    """
+    # JSONファイルを読み込む
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # 指定されたIDの情報を探す
+    target_face = None
+    for face_info in data['faces']:
+        if face_info['id'] == target_id:
+            target_face = face_info
+            break
+    
+    if target_face is None:
+        print(f"Error: Face with ID {target_id} not found")
+        return
+    
+    # 入力ディレクトリをPathオブジェクトに変換
+    input_dir = Path(input_dir)
+    
+    # 入力画像のパスを構築
+    image_path = input_dir / target_face['file_path']
+    if not image_path.exists():
+        print(f"Error: Image not found: {image_path}")
+        return
+    
+    # 出力パスを設定
+    output_path = None
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"bbox_{target_id}{image_path.suffix}"
+    
+    # バウンディングボックスを重畳して表示・保存
+    visualize_bbox(image_path, target_face['bbox'], output_path)
+
 def main():
     parser = argparse.ArgumentParser(description='Arrange images with faces centered on a 4096x4096 canvas')
     parser.add_argument('json_file', type=str, help='JSON file containing face detection results')
@@ -161,6 +239,10 @@ def main():
                       help='Filter images by emotion type')
     parser.add_argument('--emotion_threshold', type=float, default=0.90,
                       help='Threshold for emotion filtering (default: 0.90)')
+    parser.add_argument('--visualize_id', type=int,
+                      help='Visualize bounding box for a specific face ID')
+    parser.add_argument('--visualize_output', type=str,
+                      help='Output directory for visualization (if not specified, image will be displayed)')
     
     args = parser.parse_args()
     
@@ -171,6 +253,11 @@ def main():
     
     if not os.path.isdir(args.input_dir):
         print(f"Error: Input directory not found: {args.input_dir}")
+        return
+    
+    # 特定のIDの可視化が指定されている場合
+    if args.visualize_id is not None:
+        visualize_by_id(args.json_file, args.input_dir, args.visualize_id, args.visualize_output)
         return
     
     # 画像の配置処理を実行

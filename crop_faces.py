@@ -40,7 +40,7 @@ def crop_face(image_path, bbox, margin_percent=20):
     cropped = image[y1:y2, x1:x2]
     return cropped
 
-def process_face(face_info, input_dir, output_dir, margin_percent=20):
+def process_face(face_info, input_dir, output_dir, margin_percent=20, emotion_filter=None, emotion_threshold=0.5, min_bbox_size=None):
     """
     1つの顔の情報を処理し、クロップ画像を保存する
     
@@ -49,8 +49,22 @@ def process_face(face_info, input_dir, output_dir, margin_percent=20):
         input_dir (Path): 入力ディレクトリのパス
         output_dir (Path): 出力ディレクトリのパス
         margin_percent (float): バウンディングボックスに対するマージンの割合（%）
+        emotion_filter (str): 感情フィルター（'anger', 'disgust', 'fear', 'happiness', 'sadness', 'surprise', 'neutral'）
+        emotion_threshold (float): 感情の閾値（0.0-1.0）
+        min_bbox_size (int): バウンディングボックスの最小サイズ（幅または高さの小さい方）
     """
     try:
+        # 感情フィルターのチェック
+        if emotion_filter and 'emotions' in face_info:
+            if face_info['emotions'][emotion_filter] < emotion_threshold:
+                return
+        
+        # バウンディングボックスのサイズチェック
+        if min_bbox_size is not None:
+            bbox_size = min(face_info['bbox']['width'], face_info['bbox']['height'])
+            if bbox_size < min_bbox_size:
+                return
+        
         # 入力画像のパスを構築
         image_path = input_dir / face_info['file_path']
         if not image_path.exists():
@@ -78,7 +92,7 @@ def process_face(face_info, input_dir, output_dir, margin_percent=20):
     except Exception as e:
         print(f"Error processing face {face_info['id']} in {face_info['file_path']}: {str(e)}")
 
-def process_detections(json_file, input_dir, output_dir, margin_percent=20, max_workers=4):
+def process_detections(json_file, input_dir, output_dir, margin_percent=20, max_workers=4, emotion_filter=None, emotion_threshold=0.5, min_bbox_size=None):
     """
     検出結果のJSONファイルを読み込み、顔のクロップ画像を生成する
     
@@ -88,6 +102,9 @@ def process_detections(json_file, input_dir, output_dir, margin_percent=20, max_
         output_dir (str): 出力ディレクトリのパス
         margin_percent (float): バウンディングボックスに対するマージンの割合（%）
         max_workers (int): 並列処理のワーカー数
+        emotion_filter (str): 感情フィルター
+        emotion_threshold (float): 感情の閾値
+        min_bbox_size (int): バウンディングボックスの最小サイズ
     """
     # JSONファイルを読み込む
     with open(json_file, 'r', encoding='utf-8') as f:
@@ -103,7 +120,7 @@ def process_detections(json_file, input_dir, output_dir, margin_percent=20, max_
     # 並列処理で顔を処理
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
-            executor.submit(process_face, face_info, input_dir, output_dir, margin_percent)
+            executor.submit(process_face, face_info, input_dir, output_dir, margin_percent, emotion_filter, emotion_threshold, min_bbox_size)
             for face_info in data['faces']
         ]
         
@@ -123,6 +140,12 @@ def main():
                       help='Crop margin percentage around face (default: 20)')
     parser.add_argument('--workers', type=int, default=4,
                       help='Number of worker threads (default: 4)')
+    parser.add_argument('--emotion', type=str, choices=['anger', 'disgust', 'fear', 'happiness', 'sadness', 'surprise', 'neutral'],
+                      help='Filter faces by emotion')
+    parser.add_argument('--emotion-threshold', type=float, default=0.5,
+                      help='Threshold for emotion filtering (0.0-1.0, default: 0.5)')
+    parser.add_argument('--min-bbox-size', type=int,
+                      help='Minimum size of bounding box (width or height) in pixels')
     
     args = parser.parse_args()
     
@@ -135,9 +158,19 @@ def main():
         print(f"Error: Input directory not found: {args.input_dir}")
         return
     
+    # 感情フィルターの閾値チェック
+    if args.emotion and (args.emotion_threshold < 0 or args.emotion_threshold > 1):
+        print("Error: Emotion threshold must be between 0.0 and 1.0")
+        return
+    
+    # バウンディングボックスの最小サイズチェック
+    if args.min_bbox_size is not None and args.min_bbox_size <= 0:
+        print("Error: Minimum bounding box size must be greater than 0")
+        return
+    
     # 顔のクロップ処理を実行
     process_detections(args.json_file, args.input_dir, args.output_dir,
-                      args.margin, args.workers)
+                      args.margin, args.workers, args.emotion, args.emotion_threshold, args.min_bbox_size)
 
 if __name__ == "__main__":
     main() 
